@@ -6,17 +6,16 @@ import {
   AlertTriangle,
   Download,
   ArrowRight,
-  FileText,
   Activity,
   User,
   Calendar,
   ShieldCheck,
   Stethoscope,
   Info,
-  Zap
+  Zap,
+  Printer
 } from 'lucide-react';
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
 import api from '../lib/api';
 
 const BACKEND = 'http://localhost:8000';
@@ -26,7 +25,9 @@ const Result: React.FC = () => {
   const location = useLocation();
   const [prediction, setPrediction] = useState<any>(location.state?.prediction);
   const [patient, setPatient] = useState<any>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const reportRef = useRef<HTMLDivElement>(null);
+  const reportId = useRef(`OAI-${Math.floor(Math.random() * 1000000)}`);
 
   useEffect(() => {
     const fetchPatient = async () => {
@@ -43,70 +44,269 @@ const Result: React.FC = () => {
   const getRiskInfo = (result: string) => {
     switch (result) {
       case 'Normal':
-        return { color: 'bg-emerald-500', text: 'text-emerald-600', icon: CheckCircle, bg: 'bg-emerald-50', border: 'border-emerald-100' };
+        return {
+          colorHex: '#10b981',
+          bgClass: 'bg-emerald-50', textClass: 'text-emerald-600', borderClass: 'border-emerald-200',
+          icon: CheckCircle,
+          pdfColor: [16, 185, 129] as [number, number, number],
+          pdfBg: [236, 253, 245] as [number, number, number],
+        };
       case 'Osteopenia':
-        return { color: 'bg-amber-500', text: 'text-amber-600', icon: AlertTriangle, bg: 'bg-amber-50', border: 'border-amber-100' };
+        return {
+          colorHex: '#f59e0b',
+          bgClass: 'bg-amber-50', textClass: 'text-amber-600', borderClass: 'border-amber-200',
+          icon: AlertTriangle,
+          pdfColor: [245, 158, 11] as [number, number, number],
+          pdfBg: [255, 251, 235] as [number, number, number],
+        };
       case 'Osteoporosis':
-        return { color: 'bg-rose-500', text: 'text-rose-600', icon: AlertCircle, bg: 'bg-rose-50', border: 'border-rose-100' };
+        return {
+          colorHex: '#f43f5e',
+          bgClass: 'bg-rose-50', textClass: 'text-rose-600', borderClass: 'border-rose-200',
+          icon: AlertCircle,
+          pdfColor: [244, 63, 94] as [number, number, number],
+          pdfBg: [255, 241, 242] as [number, number, number],
+        };
       default:
-        return { color: 'bg-slate-500', text: 'text-slate-600', icon: AlertCircle, bg: 'bg-slate-50', border: 'border-slate-100' };
+        return {
+          colorHex: '#64748b',
+          bgClass: 'bg-slate-50', textClass: 'text-slate-600', borderClass: 'border-slate-200',
+          icon: AlertCircle,
+          pdfColor: [100, 116, 139] as [number, number, number],
+          pdfBg: [248, 250, 252] as [number, number, number],
+        };
     }
   };
 
   const risk = getRiskInfo(prediction?.result);
+  const allProbs = prediction?.allProbabilities || {};
+  const gradcamSrc = prediction?.gradcamImage ? `${BACKEND}${prediction.gradcamImage}` : null;
+  const xraySrc = prediction?.xrayImage ? `${BACKEND}${prediction.xrayImage}` : null;
+  const confidence = ((prediction?.probability || 0) * 100).toFixed(1);
 
-  const exportPDF = async () => {
-    if (!reportRef.current) return;
+  // ── Download PDF — built with jsPDF directly, no html2canvas ─────────────
+  const downloadPDF = async () => {
+    setPdfLoading(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 300));
-      const canvas = await html2canvas(reportRef.current, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: '#ffffff',
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const W = 210;
+      const margin = 16;
+      const contentW = W - margin * 2;
+      let y = 0;
+
+      // Header bar
+      pdf.setFillColor(37, 99, 235);
+      pdf.rect(0, 0, W, 28, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(18); pdf.setFont('helvetica', 'bold');
+      pdf.text('OsteoAI', margin, 12);
+      pdf.setFontSize(8); pdf.setFont('helvetica', 'normal');
+      pdf.text('MEDICAL DIAGNOSTIC REPORT', margin, 19);
+      pdf.text(`Report ID: #${reportId.current}`, W - margin, 12, { align: 'right' });
+      pdf.text(new Date().toLocaleString(), W - margin, 19, { align: 'right' });
+      y = 36;
+
+      // Patient info cards
+      const cardW = (contentW - 8) / 3;
+      [
+        { label: 'PATIENT', line1: patient?.name || patientId || '—', line2: `${patient?.age || '—'} months · ${patient?.gender || '—'}` },
+        { label: 'SCREENING DATE', line1: new Date(prediction?.timestamp).toLocaleDateString(), line2: 'X-ray AI Analysis' },
+        { label: 'AI CONFIDENCE', line1: `${confidence}%`, line2: 'EfficientNetV2S + Fusion' },
+      ].forEach((card, i) => {
+        const cx = margin + i * (cardW + 4);
+        pdf.setFillColor(248, 250, 252); pdf.setDrawColor(226, 232, 240);
+        pdf.roundedRect(cx, y, cardW, 22, 3, 3, 'FD');
+        pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(148, 163, 184);
+        pdf.text(card.label, cx + 4, y + 6);
+        pdf.setFontSize(10); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(15, 23, 42);
+        pdf.text(card.line1.slice(0, 20), cx + 4, y + 13);
+        pdf.setFontSize(7.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(100, 116, 139);
+        pdf.text(card.line2, cx + 4, y + 19);
       });
-      const imgData = canvas.toDataURL('image/jpeg', 0.85);
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+      y += 30;
+
+      // Risk result block
+      pdf.setFillColor(...risk.pdfBg);
+      pdf.setDrawColor(...risk.pdfColor); pdf.setLineWidth(0.5);
+      pdf.roundedRect(margin, y, contentW, 38, 4, 4, 'FD');
+      pdf.setFontSize(22); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...risk.pdfColor);
+      pdf.text(prediction?.result || '—', W / 2, y + 14, { align: 'center' });
+      const riskDesc = `AI model detected structural patterns suggesting a ${(prediction?.result || '').toLowerCase()} risk level for osteoporosis.`;
+      pdf.setFontSize(8.5); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(71, 85, 105);
+      pdf.text(pdf.splitTextToSize(riskDesc, contentW - 20), W / 2, y + 22, { align: 'center' });
+      // Bar
+      const barX = margin + 30, barW2 = contentW - 60, barY = y + 33;
+      pdf.setFillColor(226, 232, 240); pdf.roundedRect(barX, barY, barW2, 3, 1.5, 1.5, 'F');
+      pdf.setFillColor(...risk.pdfColor); pdf.roundedRect(barX, barY, barW2 * (prediction?.probability || 0), 3, 1.5, 1.5, 'F');
+      y += 46;
+
+      // Class probabilities
+      if (Object.keys(allProbs).length > 0) {
+        pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(15, 23, 42);
+        pdf.text('Class Probabilities', margin, y); y += 6;
+        const probColors: Record<string, [number,number,number]> = {
+          Normal: [16, 185, 129], Osteopenia: [245, 158, 11], Osteoporosis: [244, 63, 94],
+        };
+        Object.entries(allProbs).forEach(([label, prob]: [string, any]) => {
+          pdf.setFillColor(248, 250, 252); pdf.setDrawColor(226, 232, 240);
+          pdf.rect(margin, y, contentW, 10, 'FD');
+          pdf.setFontSize(8.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(51, 65, 85);
+          pdf.text(label, margin + 3, y + 6.5);
+          pdf.setTextColor(15, 23, 42);
+          pdf.text(`${(prob * 100).toFixed(1)}%`, W - margin - 3, y + 6.5, { align: 'right' });
+          const bx = margin + 50, bw = contentW - 70;
+          pdf.setFillColor(226, 232, 240); pdf.roundedRect(bx, y + 3, bw, 3.5, 1.5, 1.5, 'F');
+          pdf.setFillColor(...(probColors[label] || [100, 116, 139]));
+          pdf.roundedRect(bx, y + 3, bw * prob, 3.5, 1.5, 1.5, 'F');
+          y += 12;
+        });
+        y += 4;
+      }
+
+      // Recommendation
+      if (prediction?.recommendation) {
+        pdf.setFillColor(239, 246, 255); pdf.setDrawColor(147, 197, 253);
+        const recLines = pdf.splitTextToSize(prediction.recommendation, contentW - 16);
+        const recH = 10 + recLines.length * 5;
+        pdf.roundedRect(margin, y, contentW, recH, 3, 3, 'FD');
+        pdf.setFontSize(8); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(37, 99, 235);
+        pdf.text('Recommendation:', margin + 4, y + 6);
+        pdf.setFont('helvetica', 'normal'); pdf.setTextColor(30, 64, 175);
+        pdf.text(recLines, margin + 4, y + 11);
+        y += recH + 6;
+      }
+
+      // Clinical observations
+      pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(15, 23, 42);
+      pdf.text('Clinical Observations', margin, y); y += 6;
+      [
+        'Bone structure patterns analyzed using EfficientNetV2S deep learning backbone.',
+        'Tabular features (bone age, gender) fused with image features for accurate prediction.',
+        'Grad-CAM heatmap generated to highlight attention regions in the X-ray.',
+      ].forEach(line => {
+        pdf.setFillColor(248, 250, 252); pdf.setDrawColor(226, 232, 240);
+        const lines = pdf.splitTextToSize(line, contentW - 14);
+        const h = 6 + lines.length * 4.5;
+        pdf.roundedRect(margin, y, contentW, h, 2, 2, 'FD');
+        pdf.setFillColor(37, 99, 235); pdf.circle(margin + 4, y + h / 2, 1, 'F');
+        pdf.setFontSize(8); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(71, 85, 105);
+        pdf.text(lines, margin + 8, y + 5);
+        y += h + 3;
+      });
+      y += 4;
+
+      // Grad-CAM / X-ray image
+      const imgSrc = gradcamSrc || xraySrc;
+      if (imgSrc) {
+        if (y + 70 > 270) { pdf.addPage(); y = 16; }
+        pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(15, 23, 42);
+        pdf.text(gradcamSrc ? 'AI Heatmap Analysis (Grad-CAM)' : 'Uploaded X-ray Image', margin, y);
+        y += 5;
+        try {
+          const resp = await fetch(imgSrc, { mode: 'cors' });
+          const blob = await resp.blob();
+          const base64 = await new Promise<string>((res2) => {
+            const fr = new FileReader();
+            fr.onload = () => res2(fr.result as string);
+            fr.readAsDataURL(blob);
+          });
+          const imgType = blob.type.includes('png') ? 'PNG' : 'JPEG';
+          const ih = 60, iw = (ih * 4) / 3;
+          pdf.addImage(base64, imgType, W / 2 - iw / 2, y, iw, ih);
+          y += ih + 4;
+          if (gradcamSrc) {
+            pdf.setFontSize(7.5); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(148, 163, 184);
+            pdf.text('Red/yellow regions indicate highest model attention areas', W / 2, y, { align: 'center' });
+            y += 6;
+          }
+        } catch {
+          pdf.setFontSize(8); pdf.setTextColor(148, 163, 184);
+          pdf.text('[Image could not be embedded — view online]', W / 2, y + 10, { align: 'center' });
+          y += 20;
+        }
+      }
+
+      // Disclaimer
+      if (y + 22 > 277) { pdf.addPage(); y = 16; }
+      const disLines = pdf.splitTextToSize(
+        'This report is generated by an AI system and should be used as a screening tool only. Final diagnosis must be confirmed by a qualified radiologist or physician.',
+        contentW - 20
+      );
+      pdf.setFillColor(15, 23, 42);
+      pdf.roundedRect(margin, y, contentW, 10 + disLines.length * 5, 3, 3, 'F');
+      pdf.setFontSize(8.5); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(96, 165, 250);
+      pdf.text('Medical Disclaimer', margin + 5, y + 7);
+      pdf.setFont('helvetica', 'normal'); pdf.setTextColor(148, 163, 184);
+      pdf.text(disLines, margin + 5, y + 13);
+
+      // Footer
+      pdf.setFontSize(7); pdf.setTextColor(148, 163, 184);
+      pdf.text('Generated by OsteoAI — Osteoporosis Risk Prediction System', W / 2, 290, { align: 'center' });
+
       pdf.save(`OsteoAI_Report_${patientId}_${Date.now()}.pdf`);
-    } catch (error) {
-      console.error('PDF Export failed:', error);
-      alert('Failed to generate PDF. Use Ctrl+P to print instead.');
+    } catch (err) {
+      console.error('PDF error:', err);
+      alert('PDF generation failed. Use the Print button instead.');
+    } finally {
+      setPdfLoading(false);
     }
   };
 
-  const gradcamSrc = prediction?.gradcamImage
-    ? `${BACKEND}${prediction.gradcamImage}`
-    : null;
+  // ── Print with color-accurate styles ─────────────────────────────────────
+  const handlePrint = () => {
+    const style = document.createElement('style');
+    style.id = '__osteoai_print__';
+    style.innerHTML = `
+      @media print {
+        body > * { display: none !important; }
+        #osteoai-report-wrap { display: block !important; position: fixed; top: 0; left: 0; width: 100%; z-index: 99999; background: white; padding: 20px; }
+        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
+      }
+    `;
+    document.head.appendChild(style);
 
-  const xraySrc = prediction?.xrayImage
-    ? `${BACKEND}${prediction.xrayImage}`
-    : null;
+    // Wrap report and move to top of body temporarily
+    const wrap = document.createElement('div');
+    wrap.id = 'osteoai-report-wrap';
+    const clone = reportRef.current?.cloneNode(true) as HTMLElement;
+    if (clone) {
+      wrap.appendChild(clone);
+      document.body.appendChild(wrap);
+    }
 
-  const allProbs = prediction?.allProbabilities || {};
+    window.print();
+
+    setTimeout(() => {
+      document.getElementById('__osteoai_print__')?.remove();
+      document.getElementById('osteoai-report-wrap')?.remove();
+    }, 1500);
+  };
 
   return (
     <div className="p-6 md:p-10 pt-24 min-h-screen bg-slate-50">
       <div className="max-w-5xl mx-auto">
+
+        {/* Action bar */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
           <div>
             <h2 className="text-3xl font-black text-slate-900 tracking-tight">Screening Result</h2>
             <p className="text-slate-500">Comprehensive AI analysis for Patient {patientId}</p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-3 flex-wrap">
             <button
-              onClick={() => window.print()}
+              onClick={handlePrint}
               className="flex items-center px-6 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold hover:bg-slate-50 transition-all shadow-sm"
             >
+              <Printer className="w-5 h-5 mr-2" />
               Print
             </button>
             <button
-              onClick={exportPDF}
-              className="flex items-center px-6 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold hover:bg-slate-50 transition-all shadow-sm"
+              onClick={downloadPDF}
+              disabled={pdfLoading}
+              className="flex items-center px-6 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold hover:bg-slate-50 transition-all shadow-sm disabled:opacity-60"
             >
               <Download className="w-5 h-5 mr-2" />
-              Download PDF
+              {pdfLoading ? 'Generating...' : 'Download PDF'}
             </button>
             <Link
               to="/chatbot"
@@ -118,176 +318,152 @@ const Result: React.FC = () => {
           </div>
         </div>
 
-        <div ref={reportRef} id="report-content" className="bg-white p-12 rounded-[2rem] shadow-2xl border border-slate-100 mb-12 relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-12 opacity-[0.03] -mr-10 -mt-10">
-            <Activity className="w-64 h-64 text-blue-600" />
+        {/* Report */}
+        <div id="osteoai-report" ref={reportRef} className="bg-white p-10 rounded-[2rem] shadow-xl border border-slate-100 mb-12">
+
+          {/* Header */}
+          <div className="flex justify-between items-start mb-10 pb-8 border-b border-slate-100">
+            <div className="flex items-center">
+              <div className="bg-blue-600 p-2.5 rounded-xl mr-4">
+                <Activity className="h-7 w-7 text-white" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-black text-slate-900">OsteoAI</h1>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Medical Diagnostic Report</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-sm font-bold text-slate-900">Report ID: #{reportId.current}</p>
+              <p className="text-xs text-slate-400">{new Date().toLocaleString()}</p>
+            </div>
           </div>
 
-          <div className="relative z-10">
-            {/* Header */}
-            <div className="flex justify-between items-start mb-12 border-b border-slate-100 pb-8">
-              <div className="flex items-center">
-                <div className="bg-blue-600 p-2 rounded-xl mr-4">
-                  <Activity className="h-8 w-8 text-white" />
-                </div>
-                <div>
-                  <h1 className="text-2xl font-black text-slate-900 tracking-tighter">OsteoAI</h1>
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Medical Diagnostic Report</p>
-                </div>
-              </div>
-              <div className="text-right">
-                <p className="text-sm font-bold text-slate-900">Report ID: #OAI-{Math.floor(Math.random() * 1000000)}</p>
-                <p className="text-xs text-slate-500">{new Date().toLocaleString()}</p>
-              </div>
-            </div>
-
-            {/* Patient info */}
-            <div className="grid md:grid-cols-3 gap-8 mb-12">
-              <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100">
+          {/* Patient cards */}
+          <div className="grid grid-cols-3 gap-5 mb-10">
+            {[
+              { icon: User, label: 'Patient', line1: patient?.name || 'Loading...', line2: `${patient?.age || '—'} months · ${patient?.gender || '—'}` },
+              { icon: Calendar, label: 'Date', line1: new Date(prediction?.timestamp).toLocaleDateString(), line2: 'X-ray AI Analysis' },
+              { icon: ShieldCheck, label: 'Confidence', line1: `${confidence}%`, line2: 'EfficientNetV2S + Fusion' },
+            ].map(({ icon: Icon, label, line1, line2 }) => (
+              <div key={label} className="p-5 bg-slate-50 rounded-2xl border border-slate-100">
                 <div className="flex items-center text-slate-400 mb-2">
-                  <User className="w-4 h-4 mr-2" />
-                  <span className="text-xs font-bold uppercase tracking-widest">Patient Details</span>
+                  <Icon className="w-4 h-4 mr-1.5" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest">{label}</span>
                 </div>
-                <p className="text-lg font-black text-slate-900">{patient?.name || 'Loading...'}</p>
-                <p className="text-sm text-slate-500">{patient?.age} months • {patient?.gender}</p>
+                <p className="text-base font-black text-slate-900">{line1}</p>
+                <p className="text-xs text-slate-500">{line2}</p>
               </div>
-              <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100">
-                <div className="flex items-center text-slate-400 mb-2">
-                  <Calendar className="w-4 h-4 mr-2" />
-                  <span className="text-xs font-bold uppercase tracking-widest">Screening Date</span>
-                </div>
-                <p className="text-lg font-black text-slate-900">{new Date(prediction?.timestamp).toLocaleDateString()}</p>
-                <p className="text-sm text-slate-500">X-ray AI Analysis</p>
-              </div>
-              <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100">
-                <div className="flex items-center text-slate-400 mb-2">
-                  <ShieldCheck className="w-4 h-4 mr-2" />
-                  <span className="text-xs font-bold uppercase tracking-widest">AI Confidence</span>
-                </div>
-                <p className="text-lg font-black text-slate-900">{((prediction?.probability || 0) * 100).toFixed(1)}%</p>
-                <p className="text-sm text-slate-500">EfficientNetV2S + Fusion</p>
-              </div>
-            </div>
+            ))}
+          </div>
 
-            {/* Risk result */}
-            <div className={`p-10 rounded-[2.5rem] ${risk.bg} ${risk.border} border-2 flex flex-col items-center text-center mb-12`}>
-              <div className="p-5 rounded-3xl bg-white shadow-sm mb-6">
-                <risk.icon className={`w-16 h-16 ${risk.text}`} />
-              </div>
-              <h3 className={`text-5xl font-black ${risk.text} mb-3 tracking-tight`}>{prediction?.result}</h3>
-              <p className="text-slate-600 text-lg max-w-xl mx-auto">
-                Our AI model has detected structural patterns in the X-ray imaging that suggest a
-                <strong> {prediction?.result?.toLowerCase()}</strong> risk level for osteoporosis.
-              </p>
-              <div className="w-full max-w-lg bg-white/50 rounded-full h-4 mt-8 overflow-hidden border border-white/50">
-                <div
-                  className={`${risk.color} h-full transition-all duration-1000 shadow-lg`}
-                  style={{ width: `${(prediction?.probability || 0) * 100}%` }}
-                ></div>
-              </div>
+          {/* Risk result */}
+          <div
+            className={`p-8 rounded-[2rem] border-2 flex flex-col items-center text-center mb-10 ${risk.bgClass} ${risk.borderClass}`}
+          >
+            <div className="p-4 rounded-2xl bg-white shadow-sm mb-5 inline-flex">
+              <risk.icon className="w-14 h-14" style={{ color: risk.colorHex }} />
             </div>
+            <h3 className="text-5xl font-black mb-3" style={{ color: risk.colorHex }}>
+              {prediction?.result}
+            </h3>
+            <p className="text-slate-600 max-w-lg">
+              AI model detected patterns suggesting a <strong>{prediction?.result?.toLowerCase()}</strong> risk level for osteoporosis.
+            </p>
+            <div className="w-full max-w-md mt-6 bg-white/60 rounded-full h-3 overflow-hidden">
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${(prediction?.probability || 0) * 100}%`, backgroundColor: risk.colorHex }}
+              />
+            </div>
+          </div>
 
-            {/* Class probabilities */}
-            {Object.keys(allProbs).length > 0 && (
-              <div className="mb-12 p-8 bg-slate-50 rounded-3xl border border-slate-100">
-                <h4 className="text-lg font-black text-slate-900 mb-6 flex items-center">
-                  <Activity className="w-5 h-5 mr-2 text-blue-600" />
-                  Class Probabilities
-                </h4>
-                <div className="space-y-4">
-                  {Object.entries(allProbs).map(([label, prob]: [string, any]) => (
+          {/* Class probabilities */}
+          {Object.keys(allProbs).length > 0 && (
+            <div className="mb-10 p-7 bg-slate-50 rounded-2xl border border-slate-100">
+              <h4 className="text-lg font-black text-slate-900 mb-5 flex items-center">
+                <Activity className="w-5 h-5 mr-2 text-blue-600" />
+                Class Probabilities
+              </h4>
+              <div className="space-y-4">
+                {Object.entries(allProbs).map(([label, prob]: [string, any]) => {
+                  const c = label === 'Normal' ? '#10b981' : label === 'Osteopenia' ? '#f59e0b' : '#f43f5e';
+                  return (
                     <div key={label}>
-                      <div className="flex justify-between text-sm font-bold mb-1">
+                      <div className="flex justify-between text-sm font-bold mb-1.5">
                         <span className="text-slate-700">{label}</span>
                         <span className="text-slate-900">{(prob * 100).toFixed(1)}%</span>
                       </div>
                       <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all duration-700 ${
-                            label === 'Normal' ? 'bg-emerald-500' :
-                            label === 'Osteopenia' ? 'bg-amber-500' : 'bg-rose-500'
-                          }`}
-                          style={{ width: `${prob * 100}%` }}
-                        ></div>
+                        <div className="h-full rounded-full" style={{ width: `${prob * 100}%`, backgroundColor: c }} />
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Clinical + Grad-CAM */}
-            <div className="grid md:grid-cols-2 gap-8 mb-12">
-              <div className="space-y-6">
-                <h4 className="text-xl font-black text-slate-900 flex items-center">
-                  <Stethoscope className="w-6 h-6 mr-3 text-blue-600" />
-                  Clinical Observations
-                </h4>
-                <div className="space-y-4">
-                  <div className="flex items-start p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                    <div className="w-2 h-2 rounded-full bg-blue-600 mt-2 mr-3"></div>
-                    <p className="text-sm text-slate-600">Bone structure patterns analyzed using EfficientNetV2S deep learning backbone.</p>
-                  </div>
-                  <div className="flex items-start p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                    <div className="w-2 h-2 rounded-full bg-blue-600 mt-2 mr-3"></div>
-                    <p className="text-sm text-slate-600">Tabular features (bone age, gender) fused with image features for accurate prediction.</p>
-                  </div>
-                  {prediction?.recommendation && (
-                    <div className="flex items-start p-4 bg-blue-50 rounded-2xl border border-blue-100">
-                      <div className="w-2 h-2 rounded-full bg-blue-600 mt-2 mr-3 shrink-0"></div>
-                      <p className="text-sm text-blue-800 font-medium">{prediction.recommendation}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <h4 className="text-xl font-black text-slate-900 mb-6 flex items-center">
-                  <Zap className="w-6 h-6 mr-3 text-blue-600" />
-                  AI Heatmap Analysis (Grad-CAM)
-                </h4>
-                <div className="rounded-3xl overflow-hidden border-2 border-slate-200 aspect-[4/3] relative bg-slate-100">
-                  {gradcamSrc ? (
-                    <img
-                      src={gradcamSrc}
-                      alt="Grad-CAM heatmap"
-                      className="w-full h-full object-contain"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                    />
-                  ) : xraySrc ? (
-                    <img
-                      src={xraySrc}
-                      alt="Uploaded X-ray"
-                      className="w-full h-full object-contain"
-                    />
-                  ) : (
-                    <div className="absolute inset-0 flex items-center justify-center text-center p-6">
-                      <div>
-                        <Zap className="w-10 h-10 mx-auto mb-3 text-slate-300" />
-                        <p className="text-sm font-bold uppercase tracking-widest text-slate-400">Grad-CAM Visualization</p>
-                        <p className="text-xs text-slate-400 mt-1">Generated after model inference</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                {gradcamSrc && (
-                  <p className="text-xs text-slate-400 mt-2 text-center font-medium">
-                    Red/yellow regions indicate highest attention areas used by the model
-                  </p>
-                )}
+                  );
+                })}
               </div>
             </div>
+          )}
 
-            {/* Disclaimer */}
-            <div className="p-8 bg-slate-900 rounded-3xl text-white flex items-center">
-              <Info className="w-10 h-10 mr-6 text-blue-400 shrink-0" />
-              <div>
-                <h5 className="font-bold text-lg mb-1">Medical Disclaimer</h5>
-                <p className="text-slate-400 text-sm leading-relaxed">
-                  This report is generated by an AI system and should be used as a screening tool only.
-                  Final diagnosis must be confirmed by a qualified radiologist or physician.
-                </p>
+          {/* Clinical + Grad-CAM */}
+          <div className="grid md:grid-cols-2 gap-8 mb-10">
+            <div className="space-y-4">
+              <h4 className="text-lg font-black text-slate-900 flex items-center">
+                <Stethoscope className="w-5 h-5 mr-2 text-blue-600" />
+                Clinical Observations
+              </h4>
+              {[
+                'Bone structure patterns analyzed using EfficientNetV2S deep learning backbone.',
+                'Tabular features (bone age, gender) fused with image features for accurate prediction.',
+              ].map((obs, i) => (
+                <div key={i} className="flex items-start p-4 bg-slate-50 rounded-xl border border-slate-100">
+                  <div className="w-2 h-2 rounded-full bg-blue-600 mt-1.5 mr-3 shrink-0" />
+                  <p className="text-sm text-slate-600">{obs}</p>
+                </div>
+              ))}
+              {prediction?.recommendation && (
+                <div className="flex items-start p-4 bg-blue-50 rounded-xl border border-blue-100">
+                  <div className="w-2 h-2 rounded-full bg-blue-600 mt-1.5 mr-3 shrink-0" />
+                  <p className="text-sm text-blue-800 font-medium">{prediction.recommendation}</p>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <h4 className="text-lg font-black text-slate-900 mb-4 flex items-center">
+                <Zap className="w-5 h-5 mr-2 text-blue-600" />
+                AI Heatmap (Grad-CAM)
+              </h4>
+              <div className="rounded-2xl overflow-hidden border-2 border-slate-200 aspect-[4/3] bg-slate-100 relative">
+                {(gradcamSrc || xraySrc) ? (
+                  <img
+                    src={gradcamSrc || xraySrc!}
+                    alt={gradcamSrc ? 'Grad-CAM heatmap' : 'X-ray image'}
+                    className="w-full h-full object-contain"
+                    crossOrigin="anonymous"
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300">
+                    <Zap className="w-10 h-10 mb-2" />
+                    <p className="text-xs font-bold uppercase tracking-widest">Grad-CAM Visualization</p>
+                  </div>
+                )}
               </div>
+              {gradcamSrc && (
+                <p className="text-xs text-slate-400 mt-2 text-center">
+                  Red/yellow = highest model attention areas
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Disclaimer */}
+          <div className="p-7 bg-slate-900 rounded-2xl text-white flex items-start gap-5">
+            <Info className="w-8 h-8 text-blue-400 shrink-0 mt-0.5" />
+            <div>
+              <h5 className="font-bold text-base mb-1">Medical Disclaimer</h5>
+              <p className="text-slate-400 text-sm leading-relaxed">
+                This report is generated by an AI system and should be used as a screening tool only.
+                Final diagnosis must be confirmed by a qualified radiologist or physician.
+              </p>
             </div>
           </div>
         </div>
