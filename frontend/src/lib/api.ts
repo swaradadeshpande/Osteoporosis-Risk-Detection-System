@@ -1,8 +1,13 @@
 // api.ts — connects to FastAPI backend at http://localhost:8000
 
-const BASE_URL = "http://localhost:8000";
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-async function request(method: string, url: string, body?: any, isForm = false) {
+async function request(
+  method: string,
+  url: string,
+  body?: any,
+  isForm = false,
+) {
   const opts: RequestInit = { method, headers: {} };
   if (body) {
     if (isForm) {
@@ -45,7 +50,10 @@ const api = {
 
 export default api;
 
-export const getGeminiResponse = async (patientId: string, message: string): Promise<string> => {
+export const getGeminiResponse = async (
+  patientId: string,
+  message: string,
+): Promise<string> => {
   try {
     const res = await request("POST", "/chatbot", { patientId, message });
     return (res.data as any).reply || "I'm sorry, I couldn't process that.";

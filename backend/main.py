@@ -3,12 +3,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import uvicorn
-import os
 import uuid
 import shutil
 from pathlib import Path
 from typing import Optional
 import base64
+import os, requests
+
+MODEL_PATH = "osteoporosis_risk_model_final.keras"
+# Replace this with your actual Google Drive direct-download link
+MODEL_URL = MODEL_URL = "https://huggingface.co/Saj2005/OsteoAI/resolve/main/osteoporosis_risk_model_final.keras"
+
+def download_model():
+    if not os.path.exists(MODEL_PATH):
+        print("Downloading model from Google Drive...")
+        response = requests.get(MODEL_URL, stream=True)
+        with open(MODEL_PATH, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print("Model downloaded successfully.")
+
+download_model()
 
 from ml_model import predict_risk, get_model_status
 
